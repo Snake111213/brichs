@@ -21,6 +21,9 @@
 #include <WebServer.h>
 #include <TinyGPSPlus.h>
 #include <HardwareSerial.h>
+#include <LittleFS.h>
+
+#define LOG_FILE "/ruta.csv"
 
 // ─── WiFi ──────────────────────────────────────────────────
 const char* ssid     = "Brichs_MotorControl";
@@ -54,9 +57,53 @@ String estadoMotorB = "Detenido";
 
 WebServer server(80);
 
+// ─── NAVEGACIÓN Y LOGGING ──────────────────────────────────
+bool   modoAuto    = false;
+double targetLat   = 0.0;
+double targetLon   = 0.0;
+unsigned long lastLog = 0;
+
 // ═══════════════════════════════════════════════════════════
-//  FUNCIONES DE MOTOR
+//  FUNCIONES DE APOYO
 // ═══════════════════════════════════════════════════════════
+
+void registrarPosicion() {
+  if (!gps.location.isValid()) return;
+  File file = LittleFS.open(LOG_FILE, FILE_APPEND);
+  if (!file) return;
+  file.print(millis()); file.print(",");
+  file.print(gps.location.lat(), 6); file.print(",");
+  file.println(gps.location.lng(), 6);
+  file.close();
+}
+
+void procesarNavegacion() {
+  if (!modoAuto || !gps.location.isValid()) return;
+
+  double dist = TinyGPSPlus::distanceBetween(gps.location.lat(), gps.location.lng(), targetLat, targetLon);
+  double cursoHacia = TinyGPSPlus::courseTo(gps.location.lat(), gps.location.lng(), targetLat, targetLon);
+  
+  if (dist < 3.0) { // Llegamos (umbral 3 metros)
+    detenerTodo();
+    modoAuto = false;
+    Serial.println(">> Destino alcanzado!");
+    return;
+  }
+
+  // Lógica de giro básica basada en el rumbo del GPS
+  // Nota: El GPS solo da rumbo confiable si el robot se está moviendo.
+  if (gps.course.isValid() && gps.speed.kmph() > 1.0) {
+    double dif = cursoHacia - gps.course.deg();
+    if (dif > 180) dif -= 360;
+    if (dif < -180) dif += 360;
+
+    if (dif > 20)      girarDerecha();
+    else if (dif < -20) girarIzquierda();
+    else                avanzar();
+  } else {
+    avanzar(); // Si no hay rumbo, avanzamos un poco para obtener uno
+  }
+}
 
 void motorA_adelante() { digitalWrite(IN1,LOW);  digitalWrite(IN2,HIGH); ledcWrite(ENA,velocidadA); estadoMotorA="Adelante"; }
 void motorA_atras()    { digitalWrite(IN1,HIGH); digitalWrite(IN2,LOW);  ledcWrite(ENA,velocidadA); estadoMotorA="Atrás"; }
@@ -177,6 +224,7 @@ String generarHTML() {
   <div class="tabs">
     <button class="tab active" onclick="switchTab('robot')">&#x1F697; Robot</button>
     <button class="tab" onclick="switchTab('gps')">&#x1F6F0;&#xFE0F; GPS</button>
+    <button class="tab" onclick="switchTab('nav')">&#x1F3AF; Navegaci&oacute;n</button>
     <button class="tab" onclick="switchTab('individual')">&#x2699;&#xFE0F; Individual</button>
   </div>
 
@@ -226,6 +274,28 @@ String generarHTML() {
         <div class="gs"><div class="lbl">HDOP</div><div class="val" id="gh">--</div></div>
       </div>
     </div>
+    <div class="card">
+      <div class="card-title">&#x1F4C2; Registro de Datos (Log)</div>
+      <button class="mb fwd" style="width:100%" onclick="window.open('/descargar-log')">&#x2935; Descargar Ruta (.CSV)</button>
+      <button class="mb rev" style="width:100%;margin-top:8px" onclick="fetch('/borrar-log')">&#x1F5D1; Borrar Historial</button>
+    </div>
+  </div>
+
+  <div id="panel-nav" class="panel">
+    <div class="card">
+      <div class="card-title">&#x1F3AF; Destino Aut&oacute;nomo</div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div>
+          <div class="lbl" style="font-size:0.6rem;color:var(--muted);margin-bottom:4px">LATITUD</div>
+          <input type="text" id="tLat" placeholder="Ej: 19.4326" style="width:100%;padding:10px;background:var(--glass);border:1px solid var(--border);color:white;border-radius:8px">
+        </div>
+        <div>
+          <div class="lbl" style="font-size:0.6rem;color:var(--muted);margin-bottom:4px">LONGITUD</div>
+          <input type="text" id="tLon" placeholder="Ej: -99.1332" style="width:100%;padding:10px;background:var(--glass);border:1px solid var(--border);color:white;border-radius:8px">
+        </div>
+        <button id="btnAuto" class="mb fwd" onclick="toggleAuto()" style="width:100%;padding:15px;margin-top:10px">&#x25B6; Iniciar Navegaci&#xF3;n</button>
+      </div>
+    </div>
   </div>
 
   <div class="card">
@@ -260,7 +330,26 @@ String generarHTML() {
 </div>
 
 <script>
-  const TABS = {robot:0, individual:1, gps:2};
+  const TABS = {robot:0, gps:1, nav:2, individual:3};
+  let autoMode = false;
+
+  function toggleAuto() {
+    if(!autoMode) {
+      let lat = document.getElementById('tLat').value;
+      let lon = document.getElementById('tLon').value;
+      fetch('/iniciar-auto?lat='+lat+'&lon='+lon).then(()=> {
+        autoMode = true;
+        document.getElementById('btnAuto').textContent = '⏹ Detener Autonómo';
+        document.getElementById('btnAuto').className = 'mb rev';
+      });
+    } else {
+      fetch('/parar').then(()=> {
+        autoMode = false;
+        document.getElementById('btnAuto').textContent = '▶ Iniciar Navegación';
+        document.getElementById('btnAuto').className = 'mb fwd';
+      });
+    }
+  }
   function switchTab(t) {
     document.querySelectorAll('.tab').forEach(e=>e.classList.remove('active'));
     document.querySelectorAll('.panel').forEach(e=>e.classList.remove('active'));
@@ -352,7 +441,30 @@ String gpsToJson(TinyGPSPlus &g) {
 }
 
 void handleGPS() {
-  server.send(200, "application/json", gpsToJson(gps));
+  String json = gpsToJson(gps);
+  json.remove(json.length()-1); // quitar }
+  json += ",\"auto\":" + String(modoAuto ? "true" : "false") + "}";
+  server.send(200, "application/json", json);
+}
+
+void handleIniciarAuto() {
+  targetLat = server.arg("lat").toDouble();
+  targetLon = server.arg("lon").toDouble();
+  modoAuto = true;
+  server.send(200, "text/plain", "OK");
+  Serial.println(">> Navegacion Iniciada a: " + String(targetLat,6) + "," + String(targetLon,6));
+}
+
+void handleDescargarLog() {
+  if (!LittleFS.exists(LOG_FILE)) { server.send(404, "text/plain", "No hay log"); return; }
+  File file = LittleFS.open(LOG_FILE, "r");
+  server.streamFile(file, "text/csv");
+  file.close();
+}
+
+void handleBorrarLog() {
+  LittleFS.remove(LOG_FILE);
+  server.send(200, "text/plain", "Borrado");
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -371,6 +483,10 @@ void setup() {
   ledcAttach(ENA, PWM_FREQ, PWM_RESOLUTION);
   ledcAttach(ENB, PWM_FREQ, PWM_RESOLUTION);
   detenerTodo();
+
+  // LittleFS
+  if(!LittleFS.begin(true)) Serial.println("Error LittleFS");
+  else Serial.println("LittleFS Montado");
 
   // GPS — TX del módulo -> RX del ESP32, el TX del ESP32 no se conecta (-1)
   serialGPS.begin(GPS_BAUD, SERIAL_8N1, GPS_RX, -1);
@@ -398,6 +514,9 @@ void setup() {
   server.on("/velocidad",  handleVelocidad);
   server.on("/estado",     handleEstado);
   server.on("/gps",        handleGPS);
+  server.on("/iniciar-auto", handleIniciarAuto);
+  server.on("/descargar-log", handleDescargarLog);
+  server.on("/borrar-log",   handleBorrarLog);
 
   server.begin();
   Serial.println("\nServidor iniciado en http://192.168.4.1\n");
@@ -410,4 +529,13 @@ void setup() {
 void loop() {
   server.handleClient();
   while (serialGPS.available()) gps.encode(serialGPS.read());
+
+  // Navegación autónoma
+  procesarNavegacion();
+
+  // Logging cada 5 segundos
+  if (millis() - lastLog > 5000) {
+    lastLog = millis();
+    registrarPosicion();
+  }
 }
