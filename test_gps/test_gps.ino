@@ -4,14 +4,14 @@
 TinyGPSPlus gps;
 HardwareSerial serialGPS(1);
 
-#define GPS_RX 32   // Aquí conectas el TX del GPS
+#define GPS_RX 16   // Aquí conectas el TX del GPS
 
 void setup() {
   Serial.begin(115200);
   delay(1000);
 
   Serial.println("TEST GPS ATGM336H - 1 modulo");
-  Serial.println("GPS TX -> GPIO32");
+  Serial.println("GPS TX -> GPIO16");
   Serial.println("Esperando datos NMEA...");
 
   serialGPS.begin(9600, SERIAL_8N1, GPS_RX, -1);

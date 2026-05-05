@@ -9,8 +9,7 @@
  *    IN3=GPIO25 | IN4=GPIO33 | ENB=GPIO32  (Motor B)
  *
  *  GPS (ATGM336H -> ESP32):
- *    GPS 1: TX -> GPIO 16 (UART2-RX) | VCC -> 3.3V | GND -> GND
- *    GPS 2: TX -> GPIO 34 (UART1-RX) | VCC -> 3.3V | GND -> GND
+ *    GPS: TX -> GPIO 16 (UART2-RX) | VCC -> 3.3V | GND -> GND
  *    (Solo conectar TX del módulo al RX del ESP32, el TX del ESP32 no se usa)
  *
  *  LIBRERÍA REQUERIDA: TinyGPS++
@@ -36,8 +35,7 @@ const char* password = "brichs2026";
 #define ENB 32
 
 // ─── PINES GPS ─────────────────────────────────────────────
-#define GPS1_RX  16   // UART2-RX -> TX del ATGM336H #1
-#define GPS2_RX  34   // UART1-RX -> TX del ATGM336H #2  (GPIO34 es input-only, ideal para RX)
+#define GPS_RX   16   // UART2-RX -> TX del ATGM336H
 #define GPS_BAUD 9600 // Baud rate por defecto del ATGM336H
 
 // ─── PWM ───────────────────────────────────────────────────
@@ -45,9 +43,8 @@ const char* password = "brichs2026";
 #define PWM_RESOLUTION 8
 
 // ─── OBJETOS GPS ───────────────────────────────────────────
-TinyGPSPlus    gps1, gps2;
-HardwareSerial serialGPS1(2);  // UART2
-HardwareSerial serialGPS2(1);  // UART1
+TinyGPSPlus    gps;
+HardwareSerial serialGPS(2);  // UART2
 
 // ─── ESTADO ────────────────────────────────────────────────
 int    velocidadA   = 200;
@@ -179,8 +176,8 @@ String generarHTML() {
 
   <div class="tabs">
     <button class="tab active" onclick="switchTab('robot')">&#x1F697; Robot</button>
-    <button class="tab" onclick="switchTab('individual')">&#x2699;&#xFE0F; Individual</button>
     <button class="tab" onclick="switchTab('gps')">&#x1F6F0;&#xFE0F; GPS</button>
+    <button class="tab" onclick="switchTab('individual')">&#x2699;&#xFE0F; Individual</button>
   </div>
 
   <div id="panel-robot" class="panel active">
@@ -218,28 +215,15 @@ String generarHTML() {
   <div id="panel-gps" class="panel">
     <div class="card">
       <div class="gps-head">
-        <div class="gps-title">&#x1F6F0;&#xFE0F; GPS 1 &#x2014; Principal</div>
-        <span class="badge bnofix" id="g1b">Sin fix</span>
+        <div class="gps-title">&#x1F6F0;&#xFE0F; GPS &#x2014; Ubicaci&oacute;n</div>
+        <span class="badge bnofix" id="gb">Sin fix</span>
       </div>
       <div class="gg">
-        <div class="gc"><div class="lbl">Posici&#xF3;n</div><div class="val" id="g1c">Buscando se&#xF1;al...</div></div>
-        <div class="gs"><div class="lbl">Sat&#xE9;lites</div><div class="val" id="g1s">--</div></div>
-        <div class="gs"><div class="lbl">Altitud</div><div class="val" id="g1a">-- m</div></div>
-        <div class="gs"><div class="lbl">Velocidad</div><div class="val" id="g1v">-- km/h</div></div>
-        <div class="gs"><div class="lbl">HDOP</div><div class="val" id="g1h">--</div></div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="gps-head">
-        <div class="gps-title">&#x1F6F0;&#xFE0F; GPS 2 &#x2014; Secundario</div>
-        <span class="badge bnofix" id="g2b">Sin fix</span>
-      </div>
-      <div class="gg">
-        <div class="gc"><div class="lbl">Posici&#xF3;n</div><div class="val" id="g2c">Buscando se&#xF1;al...</div></div>
-        <div class="gs"><div class="lbl">Sat&#xE9;lites</div><div class="val" id="g2s">--</div></div>
-        <div class="gs"><div class="lbl">Altitud</div><div class="val" id="g2a">-- m</div></div>
-        <div class="gs"><div class="lbl">Velocidad</div><div class="val" id="g2v">-- km/h</div></div>
-        <div class="gs"><div class="lbl">HDOP</div><div class="val" id="g2h">--</div></div>
+        <div class="gc"><div class="lbl">Posici&#xF3;n</div><div class="val" id="gc">Buscando se&#xF1;al...</div></div>
+        <div class="gs"><div class="lbl">Sat&#xE9;lites</div><div class="val" id="gs">--</div></div>
+        <div class="gs"><div class="lbl">Altitud</div><div class="val" id="ga">-- m</div></div>
+        <div class="gs"><div class="lbl">Velocidad</div><div class="val" id="gv">-- km/h</div></div>
+        <div class="gs"><div class="lbl">HDOP</div><div class="val" id="gh">--</div></div>
       </div>
     </div>
   </div>
@@ -270,7 +254,7 @@ String generarHTML() {
       <div class="ii"><div class="lbl">IP</div><div class="val">192.168.4.1</div></div>
       <div class="ii"><div class="lbl">Puente H</div><div class="val">L298N</div></div>
       <div class="ii"><div class="lbl">MCU</div><div class="val">ESP32</div></div>
-      <div class="ii"><div class="lbl">GPS</div><div class="val">2x ATGM336H</div></div>
+      <div class="ii"><div class="lbl">GPS</div><div class="val">1x ATGM336H</div></div>
     </div>
   </div>
 </div>
@@ -298,22 +282,19 @@ String generarHTML() {
   function cls(s) { return s==='Detenido'?'stopped':s==='Adelante'?'forward':'reverse'; }
   function pollGPS() {
     fetch('/gps').then(r=>r.json()).then(d=>{
-      upGPS(1,d.gps1); upGPS(2,d.gps2);
+      let b=document.getElementById('gb'), c=document.getElementById('gc');
+      if(d.fix) {
+        b.textContent='FIX OK'; b.className='badge bfix';
+        c.textContent=d.lat.toFixed(6)+', '+d.lon.toFixed(6);
+      } else {
+        b.textContent='Sin fix'; b.className='badge bnofix';
+        c.textContent='Buscando... ('+d.chars+' chars recibidos)';
+      }
+      document.getElementById('gs').textContent = d.sats;
+      document.getElementById('ga').textContent = d.alt.toFixed(1)+' m';
+      document.getElementById('gv').textContent = d.speed.toFixed(1)+' km/h';
+      document.getElementById('gh').textContent = d.hdop.toFixed(2);
     }).catch(e=>console.log(e));
-  }
-  function upGPS(n,d) {
-    let b=document.getElementById('g'+n+'b'), c=document.getElementById('g'+n+'c');
-    if(d.fix) {
-      b.textContent='FIX OK'; b.className='badge bfix';
-      c.textContent=d.lat.toFixed(6)+', '+d.lon.toFixed(6);
-    } else {
-      b.textContent='Sin fix'; b.className='badge bnofix';
-      c.textContent='Buscando... ('+d.chars+' chars recibidos)';
-    }
-    document.getElementById('g'+n+'s').textContent = d.sats;
-    document.getElementById('g'+n+'a').textContent = d.alt.toFixed(1)+' m';
-    document.getElementById('g'+n+'v').textContent = d.speed.toFixed(1)+' km/h';
-    document.getElementById('g'+n+'h').textContent = d.hdop.toFixed(2);
   }
   setInterval(pollMotors, 2000);
   setInterval(pollGPS,    1000);
@@ -371,8 +352,7 @@ String gpsToJson(TinyGPSPlus &g) {
 }
 
 void handleGPS() {
-  String json = "{\"gps1\":" + gpsToJson(gps1) + ",\"gps2\":" + gpsToJson(gps2) + "}";
-  server.send(200, "application/json", json);
+  server.send(200, "application/json", gpsToJson(gps));
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -393,11 +373,9 @@ void setup() {
   detenerTodo();
 
   // GPS — TX del módulo -> RX del ESP32, el TX del ESP32 no se conecta (-1)
-  serialGPS1.begin(GPS_BAUD, SERIAL_8N1, GPS1_RX, -1);
-  serialGPS2.begin(GPS_BAUD, SERIAL_8N1, GPS2_RX, -1);
-  Serial.println("GPS UART inicializados");
-  Serial.println("  GPS1: modulo TX -> GPIO 16");
-  Serial.println("  GPS2: modulo TX -> GPIO 34\n");
+  serialGPS.begin(GPS_BAUD, SERIAL_8N1, GPS_RX, -1);
+  Serial.println("GPS UART inicializado");
+  Serial.println("  GPS: modulo TX -> GPIO 16\n");
 
   // WiFi AP
   WiFi.softAP(ssid, password);
@@ -431,6 +409,5 @@ void setup() {
 
 void loop() {
   server.handleClient();
-  while (serialGPS1.available()) gps1.encode(serialGPS1.read());
-  while (serialGPS2.available()) gps2.encode(serialGPS2.read());
+  while (serialGPS.available()) gps.encode(serialGPS.read());
 }
